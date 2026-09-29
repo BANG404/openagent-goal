@@ -6,8 +6,8 @@ description: Use OpenAgent Goal Mode when a task needs durable objectives, progr
 # Goal Mode
 
 Goal Mode is an autonomous loop this package owns. Start it with
-`/goal <objective>`; the package then drives turn after turn until its own state
-says the Goal is finished.
+`/goal:goal <objective>`; the package then drives turn after turn until its own
+state says the Goal is finished.
 
 The package keeps each conversation's objective, To-Do list, status, and summary
 in its own data directory. Its flow step rebuilds the model's prompt from that
@@ -25,5 +25,5 @@ the run token the Goal prompt supplied:
   user input or external state is required.
 - `read_goal` returns the same projection the Goal panel shows.
 
-Do not create a separate To-Do file for `/goal`: the Goal's own To-Do list is
+Do not create a separate To-Do file for the Goal: the Goal's own To-Do list is
 the durable record.

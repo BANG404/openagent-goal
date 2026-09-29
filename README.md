@@ -11,7 +11,8 @@ Install or update this package from its GitHub repository in OpenAgent. The
 package uses the portable Agent Plugins 1.0.0 format plus the
 `extensions.openagent` contract:
 
-- `flows` declares `/goal`, whose step is `bin/goal-step.mjs`.
+- `flows` declares the `goal` flow, run as `/goal:goal`, whose step is
+  `bin/goal-step.mjs`.
 - `mcp.json` starts `bin/goal-mcp.mjs` as the package's stdio MCP server.
 - `skills/goal` documents the loop for the model.
 
@@ -44,7 +45,7 @@ To run a step by hand, feed it the payload OpenAgent would write:
 
 ```bash
 PLUGIN_DATA=/tmp/goal-data node bin/goal-step.mjs <<'JSON'
-{"conversation_id":"demo","plugin_id":"goal","flow_id":"goal","iteration":1,"argument":"ship it","input":"/goal ship it","last_output":""}
+{"conversation_id":"demo","plugin_id":"goal","flow_id":"plugin:goal:goal","iteration":1,"argument":"ship it","input":"/goal:goal ship it","last_output":""}
 JSON
 ```
 
