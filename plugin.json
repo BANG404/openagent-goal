@@ -1,15 +1,26 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "goal",
-  "version": "1.0.1",
-  "description": "Persistent goal execution through OpenAgent checkpoints.",
+  "version": "2.0.0",
+  "description": "Persistent goal execution with an autonomous continuation loop.",
   "license": "MIT",
   "repository": "https://github.com/BANG404/openagent-goal",
   "keywords": ["openagent", "goal", "checkpoint", "automation"],
   "extensions": {
     "openagent": {
       "runtime": "goal",
-      "capabilities": ["command", "checkpoint"]
+      "capabilities": ["flow", "mcp"],
+      "flows": [
+        {
+          "id": "goal",
+          "label": "Goal",
+          "description": "Work an objective to completion across turns.",
+          "argument": "required_text",
+          "step": "bin/goal-step.mjs",
+          "timeout_secs": 60,
+          "max_iterations": 50
+        }
+      ]
     }
   }
 }

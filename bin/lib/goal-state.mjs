@@ -1,0 +1,239 @@
+/**
+ * Goal state, owned by this package.
+ *
+ * OpenAgent runs the flow loop and carries whatever this package reports to the
+ * UI, but it holds none of the state itself: the objective, the To-Do list, and
+ * the run status live in this package's own `PLUGIN_DATA`, so the plugin can
+ * change its schema without a host release.
+ *
+ * A run is keyed by conversation, because Goal's own semantics are "one goal per
+ * conversation". The step learns the conversation from the turn payload it is
+ * handed; the MCP tools never see it, so the step also mints a short run token
+ * and puts it in the prompt. The model echoes that token back on every
+ * `update_goal` call, which is how a tool call finds its run without the host
+ * having to tell an out-of-process server which conversation it is serving.
+ */
+
+import { createHash, randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import path from "node:path";
+
+export const TODO_STATUSES = ["pending", "in_progress", "completed"];
+/** Statuses a package may set directly; `completed` is always derived. */
+export const FINAL_STATUSES = ["failed", "blocked", "cancelled"];
+export const RUN_STATUSES = ["running", "completed", ...FINAL_STATUSES];
+
+/** How many finished runs to keep before pruning the oldest. */
+const KEPT_RUNS = 50;
+
+export function dataRoot(env = process.env) {
+  const root = (env.PLUGIN_DATA ?? "").trim();
+  if (root === "") {
+    throw new Error(
+      "PLUGIN_DATA is not set, so this package has nowhere to keep its goal state. " +
+        "OpenAgent exports it as the package's own writable directory; set it to a " +
+        "writable empty directory to run this package outside OpenAgent.",
+    );
+  }
+  return root;
+}
+
+function runsDir(root) {
+  return path.join(root, "runs");
+}
+
+/** File name for one conversation's run. Hashed so no conversation id can escape the directory. */
+function runFile(root, conversationId) {
+  const digest = createHash("sha256").update(String(conversationId)).digest("hex");
+  return path.join(runsDir(root), `${digest}.json`);
+}
+
+export function newRunToken() {
+  return randomBytes(4).toString("hex");
+}
+
+export function newRun({ conversationId, objective }) {
+  return {
+    run_id: newRunToken(),
+    conversation_id: String(conversationId),
+    objective: objective.trim(),
+    todos: [],
+    status: "running",
+    summary: null,
+    iteration: 0,
+    updated_at: Date.now(),
+  };
+}
+
+/**
+ * Derive the run status the way Goal Mode defines it: a Goal is complete only
+ * once its To-Do list is non-empty and every To-Do is completed. A failure the
+ * model reported is sticky.
+ */
+export function reconcileRun(run) {
+  if (FINAL_STATUSES.includes(run.status)) {
+    return run;
+  }
+  const settled = run.todos.length > 0 && run.todos.every((todo) => todo.status === "completed");
+  run.status = settled ? "completed" : "running";
+  return run;
+}
+
+export function isTerminal(run) {
+  return FINAL_STATUSES.includes(run.status) || run.status === "completed";
+}
+
+export function readRun(root, conversationId) {
+  const file = runFile(root, conversationId);
+  if (!existsSync(file)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8"));
+    return normalizeStoredRun(parsed);
+  } catch {
+    return null;
+  }
+}
+
+export function writeRun(root, run) {
+  run.updated_at = Date.now();
+  reconcileRun(run);
+  const directory = runsDir(root);
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(runFile(root, run.conversation_id), `${JSON.stringify(run, null, 2)}\n`, "utf8");
+  pruneRuns(directory, runFile(root, run.conversation_id));
+}
+
+/** Find the run a model addressed by token. */
+export function findRunByToken(root, token) {
+  const wanted = String(token ?? "").trim();
+  if (wanted === "") return null;
+  const directory = runsDir(root);
+  if (!existsSync(directory)) return null;
+  for (const entry of readdirSync(directory)) {
+    if (!entry.endsWith(".json")) continue;
+    try {
+      const parsed = JSON.parse(readFileSync(path.join(directory, entry), "utf8"));
+      if (parsed?.run_id === wanted) {
+        return { run: normalizeStoredRun(parsed), file: path.join(directory, entry) };
+      }
+    } catch {
+      // A run file the user edited by hand is not a reason to fail a tool call.
+    }
+  }
+  return null;
+}
+
+export function writeRunFile(file, run) {
+  run.updated_at = Date.now();
+  reconcileRun(run);
+  writeFileSync(file, `${JSON.stringify(run, null, 2)}\n`, "utf8");
+}
+
+/**
+ * Apply one `update_goal` call to a run.
+ *
+ * The To-Do list is replaced wholesale rather than merged: the model is asked
+ * for the current list every time, so a merge would let a dropped To-Do live on
+ * forever.
+ */
+export function applyGoalUpdate(run, update) {
+  if (typeof update.objective === "string" && update.objective.trim() !== "") {
+    run.objective = update.objective.trim();
+  }
+  if (Array.isArray(update.todos)) {
+    run.todos = update.todos.map((todo, index) => normalizeTodo(todo, index));
+  }
+  if (typeof update.summary === "string") {
+    run.summary = update.summary.trim() === "" ? null : update.summary.trim();
+  }
+  if (typeof update.status === "string") {
+    const status = update.status.trim().toLowerCase();
+    if (status === "running") {
+      run.status = "running";
+    } else if (status === "completed") {
+      // Completion is derived, never asserted: the model cannot declare victory
+      // over an empty or unfinished To-Do list.
+      run.status = "running";
+      reconcileRun(run);
+    } else if (FINAL_STATUSES.includes(status)) {
+      run.status = status;
+    } else {
+      throw new Error(
+        `update_goal status must be one of ${RUN_STATUSES.join(", ")}, got '${update.status}'`,
+      );
+    }
+  }
+  reconcileRun(run);
+  return run;
+}
+
+function normalizeTodo(todo, index) {
+  if (todo === null || typeof todo !== "object" || Array.isArray(todo)) {
+    throw new Error(`update_goal todos[${index}] must be an object`);
+  }
+  const task = typeof todo.task === "string" ? todo.task.trim() : "";
+  if (task === "") {
+    throw new Error(`update_goal todos[${index}] requires a non-empty 'task' string`);
+  }
+  const status = typeof todo.status === "string" ? todo.status.trim().toLowerCase() : "pending";
+  if (!TODO_STATUSES.includes(status)) {
+    throw new Error(
+      `update_goal todos[${index}].status must be one of ${TODO_STATUSES.join(", ")}, got '${todo.status}'`,
+    );
+  }
+  return {
+    id: typeof todo.id === "string" && todo.id.trim() !== "" ? todo.id.trim() : String(index + 1),
+    task,
+    status,
+    result: typeof todo.result === "string" && todo.result.trim() !== "" ? todo.result.trim() : null,
+  };
+}
+
+function normalizeStoredRun(run) {
+  return {
+    run_id: typeof run?.run_id === "string" ? run.run_id : newRunToken(),
+    conversation_id: String(run?.conversation_id ?? ""),
+    objective: typeof run?.objective === "string" ? run.objective : "",
+    todos: Array.isArray(run?.todos) ? run.todos.map((todo, index) => normalizeTodo(todo, index)) : [],
+    status: RUN_STATUSES.includes(run?.status) ? run.status : "running",
+    summary: typeof run?.summary === "string" ? run.summary : null,
+    iteration: Number.isInteger(run?.iteration) ? run.iteration : 0,
+    updated_at: Number.isFinite(run?.updated_at) ? run.updated_at : Date.now(),
+  };
+}
+
+/**
+ * The display projection the Runtime carries to the UI.
+ *
+ * This is the whole of what the host sees: a title, a status, and a flat list.
+ * The host renders it without knowing that "To-Do" or "Goal" mean anything.
+ */
+export function runProjection(run) {
+  return {
+    title: run.objective,
+    status: run.status,
+    items: run.todos.map((todo) => {
+      const item = { id: todo.id, label: todo.task, status: todo.status };
+      if (todo.result !== null) item.detail = todo.result;
+      return item;
+    }),
+    ...(run.summary === null ? {} : { summary: run.summary }),
+  };
+}
+
+function pruneRuns(directory, keep) {
+  let entries;
+  try {
+    entries = readdirSync(directory).filter((entry) => entry.endsWith(".json"));
+  } catch {
+    return;
+  }
+  if (entries.length <= KEPT_RUNS) return;
+  const byAge = entries
+    .map((entry) => ({ entry, file: path.join(directory, entry) }))
+    .sort((a, b) => statSync(a.file).mtimeMs - statSync(b.file).mtimeMs);
+  for (const victim of byAge.slice(0, entries.length - KEPT_RUNS)) {
+    if (victim.file === keep) continue;
+    rmSync(victim.file, { force: true });
+  }
+}
