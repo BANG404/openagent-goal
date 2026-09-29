@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "goal",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Persistent goal execution through OpenAgent checkpoints.",
   "license": "MIT",
   "repository": "https://github.com/BANG404/openagent-goal",
@@ -9,19 +9,7 @@
   "extensions": {
     "openagent": {
       "runtime": "goal",
-      "capabilities": ["command", "checkpoint"],
-      "message_policies": [
-        {
-          "tag": "goal_bootstrap",
-          "user_visible": true,
-          "model_visible": true
-        },
-        {
-          "tag": "goal_continuation",
-          "user_visible": false,
-          "model_visible": true
-        }
-      ]
+      "capabilities": ["command", "checkpoint"]
     }
   }
 }
