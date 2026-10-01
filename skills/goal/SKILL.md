@@ -6,13 +6,12 @@ description: Use OpenAgent Goal Mode when a task needs durable objectives, progr
 # Goal Mode
 
 Goal Mode is an autonomous loop this package owns. Start it with
-`/goal:goal <objective>`; the package then drives turn after turn until its own
-state says the Goal is finished.
+`/goal <objective>` (or `/goal:goal`); the command starts the first turn and the
+package MCP server drives later turns through the generic `agent.wake` bridge.
 
 The package keeps each conversation's objective, To-Do list, status, and summary
-in its own data directory. Its flow step rebuilds the model's prompt from that
-state on every iteration, so the loop survives context compaction and a Runtime
-restart.
+in its own data directory. The MCP server rebuilds continuation prompts from
+that state, so the loop survives context compaction and a Runtime restart.
 
 While a Goal is running, record progress with the `update_goal` tool, passing
 the run token the Goal prompt supplied:

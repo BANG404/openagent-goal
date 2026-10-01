@@ -1,23 +1,26 @@
 # OpenAgent Goal
 
 The standard Agent Plugin package for OpenAgent Goal Mode. The package owns the
-whole capability: the autonomous continuation loop's decisions, the Goal state
-(its objective, To-Do list, status, and summary), the `update_goal`/`read_goal`
-tools, and the display projection the Goal panel renders. OpenAgent supplies
-only the loop mechanics — turn dispatch, cancellation, the iteration limit, and
-checkpoint continuation.
+whole capability: continuation decisions, Goal state (objective, To-Do list,
+status, and summary), `update_goal`/`read_goal`, recovery, and the display
+projection. OpenAgent supplies only the generic host bridge and one ordinary
+Agent execution boundary. The package uses the same conversation, branch,
+Agent wake, role, and event modules as every other plugin.
 
 Install or update this package from its GitHub repository in OpenAgent. The
 package uses the portable Agent Plugins 1.0.0 format plus the
-`extensions.openagent` contract:
+`extensions.openagent` contract. Its optional `runtime` value is update
+provenance only; it does not select a Goal implementation in the Runtime:
 
-- `flows` declares the `goal` flow, run as `/goal:goal`, whose step is
-  `bin/goal-step.mjs`.
+- `commands` declares the `goal` command. The generic package-id alias exposes
+  it as `/goal`; `/goal:goal` remains routable as its full name.
 - `mcp.json` starts `bin/goal-mcp.mjs` as the package's stdio MCP server.
 - `skills/goal` documents the loop for the model.
 
-OpenAgent exports `PLUGIN_ROOT` and `PLUGIN_DATA` to both, so the step and the
-tools share one state directory per install.
+OpenAgent exports `PLUGIN_ROOT`, `PLUGIN_DATA`, and the authenticated host
+bridge variables to every package process. The command starts the first Agent
+turn; the MCP process owns every later wake and writes state under
+`PLUGIN_DATA/runs/`.
 
 ## State
 
@@ -32,7 +35,7 @@ sticky, and the model cannot declare a Goal complete over unfinished work.
 
 ## Development
 
-This repository ships no dependencies; the step and the MCP server are plain
+This repository ships no dependencies; the command and MCP server are plain
 Node scripts. Validate the package with the validator from an
 [OpenAgent Plugin Kit](https://github.com/BANG404/openagent-plugin-kit)
 checkout, pointing at this directory.
@@ -41,13 +44,10 @@ checkout, pointing at this directory.
 bun <plugin-kit>/scripts/validate-plugin.mjs .
 ```
 
-To run a step by hand, feed it the payload OpenAgent would write:
-
-```bash
-PLUGIN_DATA=/tmp/goal-data node bin/goal-step.mjs <<'JSON'
-{"conversation_id":"demo","plugin_id":"goal","flow_id":"plugin:goal:goal","iteration":1,"argument":"ship it","input":"/goal:goal ship it","last_output":""}
-JSON
-```
+Submit `/goal <objective>` after installing the package to exercise the full
+path. The MCP server calls `agent.wake` with `wait: false` after each Goal
+update; the host queues a wake behind an active turn and persists hidden
+continuations in the checkpoint.
 
 ## License
 

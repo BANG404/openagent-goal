@@ -9,16 +9,15 @@
   "extensions": {
     "openagent": {
       "runtime": "goal",
-      "capabilities": ["flow", "mcp"],
-      "flows": [
+      "capabilities": ["command", "mcp"],
+      "commands": [
         {
           "id": "goal",
           "label": "Goal",
           "description": "Work an objective to completion across turns.",
           "argument": "required_text",
-          "step": "bin/goal-step.mjs",
-          "timeout_secs": 60,
-          "max_iterations": 50
+          "command": "bin/goal-command.mjs",
+          "timeout_secs": 30
         }
       ]
     }

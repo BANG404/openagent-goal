@@ -1,14 +1,13 @@
 /**
  * Goal state, owned by this package.
  *
- * OpenAgent runs the flow loop and carries whatever this package reports to the
- * UI, but it holds none of the state itself: the objective, the To-Do list, and
- * the run status live in this package's own `PLUGIN_DATA`, so the plugin can
- * change its schema without a host release.
+ * The package owns the entire Goal loop. OpenAgent only executes turns and
+ * exposes the generic host bridge; this state file is the package's source of
+ * truth and survives Runtime restarts.
  *
  * A run is keyed by conversation, because Goal's own semantics are "one goal per
- * conversation". The step learns the conversation from the turn payload it is
- * handed; the MCP tools never see it, so the step also mints a short run token
+ * conversation". The command learns the conversation from the turn payload it is
+ * handed; the MCP tools never see it, so the command also mints a short run token
  * and puts it in the prompt. The model echoes that token back on every
  * `update_goal` call, which is how a tool call finds its run without the host
  * having to tell an out-of-process server which conversation it is serving.
@@ -56,12 +55,14 @@ export function newRun({ conversationId, objective }) {
   return {
     run_id: newRunToken(),
     conversation_id: String(conversationId),
+    branch_id: null,
     objective: objective.trim(),
     todos: [],
     status: "running",
     summary: null,
     iteration: 0,
     updated_at: Date.now(),
+    wake_pending: false,
   };
 }
 
@@ -193,12 +194,14 @@ function normalizeStoredRun(run) {
   return {
     run_id: typeof run?.run_id === "string" ? run.run_id : newRunToken(),
     conversation_id: String(run?.conversation_id ?? ""),
+    branch_id: typeof run?.branch_id === "string" && run.branch_id.trim() ? run.branch_id : null,
     objective: typeof run?.objective === "string" ? run.objective : "",
     todos: Array.isArray(run?.todos) ? run.todos.map((todo, index) => normalizeTodo(todo, index)) : [],
     status: RUN_STATUSES.includes(run?.status) ? run.status : "running",
     summary: typeof run?.summary === "string" ? run.summary : null,
     iteration: Number.isInteger(run?.iteration) ? run.iteration : 0,
     updated_at: Number.isFinite(run?.updated_at) ? run.updated_at : Date.now(),
+    wake_pending: Boolean(run?.wake_pending),
   };
 }
 
