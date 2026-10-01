@@ -40,6 +40,7 @@ async function main() {
 
   const { branchId } = context({ _openagent: { conversation_id: conversationId, branch_id: run.branch_id } });
   await host.event.emit("plugin-flow-updated", {
+    plugin_id: "goal",
     conv_id: conversationId,
     flow_id: "plugin:goal:goal",
     status: run.status,

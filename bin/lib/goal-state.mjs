@@ -5,12 +5,12 @@
  * exposes the generic host bridge; this state file is the package's source of
  * truth and survives Runtime restarts.
  *
- * A run is keyed by conversation, because Goal's own semantics are "one goal per
- * conversation". The command learns the conversation from the turn payload it is
- * handed; the MCP tools never see it, so the command also mints a short run token
- * and puts it in the prompt. The model echoes that token back on every
- * `update_goal` call, which is how a tool call finds its run without the host
- * having to tell an out-of-process server which conversation it is serving.
+ * A run is keyed by conversation and branch. A conversation can contain several
+ * independent user branches, so package state must never let one branch replace
+ * another. The command learns both values from the turn payload and mints a
+ * short run token as a package-owned guard. The Runtime attaches the active
+ * conversation and branch to MCP calls; the server uses that context together
+ * with the token when resolving a run.
  */
 
 import { createHash, randomBytes } from "node:crypto";
@@ -42,7 +42,18 @@ function runsDir(root) {
 }
 
 /** File name for one conversation's run. Hashed so no conversation id can escape the directory. */
-function runFile(root, conversationId) {
+function branchKey(branchId) {
+  return typeof branchId === "string" && branchId.trim() !== "" ? branchId.trim() : null;
+}
+
+function runFile(root, conversationId, branchId = null) {
+  const key = `${String(conversationId)}\u0000${branchKey(branchId) ?? ""}`;
+  const digest = createHash("sha256").update(key).digest("hex");
+  return path.join(runsDir(root), `${digest}.json`);
+}
+
+/** Files written by versions that only scoped a run to its conversation. */
+function legacyRunFile(root, conversationId) {
   const digest = createHash("sha256").update(String(conversationId)).digest("hex");
   return path.join(runsDir(root), `${digest}.json`);
 }
@@ -84,15 +95,24 @@ export function isTerminal(run) {
   return FINAL_STATUSES.includes(run.status) || run.status === "completed";
 }
 
-export function readRun(root, conversationId) {
-  const file = runFile(root, conversationId);
-  if (!existsSync(file)) return null;
-  try {
-    const parsed = JSON.parse(readFileSync(file, "utf8"));
-    return normalizeStoredRun(parsed);
-  } catch {
-    return null;
+export function readRun(root, conversationId, branchId = null) {
+  const requestedBranch = branchKey(branchId);
+  const file = runFile(root, conversationId, requestedBranch);
+  const candidates = [file];
+  const legacy = legacyRunFile(root, conversationId);
+  if (legacy !== file) candidates.push(legacy);
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue;
+    try {
+      const run = normalizeStoredRun(JSON.parse(readFileSync(candidate, "utf8")));
+      if (run.conversation_id !== String(conversationId)) continue;
+      if (branchKey(run.branch_id) !== requestedBranch) continue;
+      return run;
+    } catch {
+      // A malformed package state file is ignored; another branch can still run.
+    }
   }
+  return null;
 }
 
 export function writeRun(root, run) {
@@ -100,8 +120,9 @@ export function writeRun(root, run) {
   reconcileRun(run);
   const directory = runsDir(root);
   mkdirSync(directory, { recursive: true });
-  writeFileSync(runFile(root, run.conversation_id), `${JSON.stringify(run, null, 2)}\n`, "utf8");
-  pruneRuns(directory, runFile(root, run.conversation_id));
+  const file = runFile(root, run.conversation_id, run.branch_id);
+  writeFileSync(file, `${JSON.stringify(run, null, 2)}\n`, "utf8");
+  pruneRuns(directory, file);
 }
 
 /** Find the run a model addressed by token. */
@@ -194,7 +215,7 @@ function normalizeStoredRun(run) {
   return {
     run_id: typeof run?.run_id === "string" ? run.run_id : newRunToken(),
     conversation_id: String(run?.conversation_id ?? ""),
-    branch_id: typeof run?.branch_id === "string" && run.branch_id.trim() ? run.branch_id : null,
+    branch_id: branchKey(run?.branch_id),
     objective: typeof run?.objective === "string" ? run.objective : "",
     todos: Array.isArray(run?.todos) ? run.todos.map((todo, index) => normalizeTodo(todo, index)) : [],
     status: RUN_STATUSES.includes(run?.status) ? run.status : "running",

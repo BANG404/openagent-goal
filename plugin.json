@@ -8,7 +8,6 @@
   "keywords": ["openagent", "goal", "checkpoint", "automation"],
   "extensions": {
     "openagent": {
-      "runtime": "goal",
       "capabilities": ["command", "mcp"],
       "commands": [
         {

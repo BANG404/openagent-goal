@@ -83,15 +83,22 @@ function conversationContext(args) {
 }
 
 function resolveRun(args) {
-  const { conversationId } = conversationContext(args);
+  const { conversationId, branchId } = conversationContext(args);
   const token = String(args?.run ?? "").trim();
   const found = findRunByToken(root, token);
-  if (found && found.run.conversation_id === conversationId) return { ...found, conversationId };
-  throw new Error("No Goal run matches this conversation and run token");
+  if (
+    found &&
+    found.run.conversation_id === conversationId &&
+    (found.run.branch_id ?? null) === (branchId ?? null)
+  ) {
+    return { ...found, conversationId, branchId };
+  }
+  throw new Error("No Goal run matches this conversation, branch, and run token");
 }
 
 function projectionPayload(run) {
   return {
+    plugin_id: "goal",
     conv_id: run.conversation_id,
     flow_id: "plugin:goal:goal",
     status: run.status,
@@ -103,6 +110,7 @@ function projectionPayload(run) {
         ...runProjection(run),
       },
     },
+    branch_id: run.branch_id,
   };
 }
 
@@ -138,19 +146,21 @@ function scheduleWake(run, branchId) {
   let attempt = 0;
   const tick = async () => {
     attempt += 1;
-    const current = readRun(root, run.conversation_id);
+    const current = readRun(root, run.conversation_id, run.branch_id);
     if (!current || isTerminal(current)) {
       pendingWakes.delete(run.conversation_id);
       return;
     }
     try {
-      const detail = await host.conversation.state(run.conversation_id);
-      const selectedBranch = branchId || detail.branch_id || current.branch_id || null;
+      const detail = await host.conversation.state(run.conversation_id, current.branch_id);
+      const selectedBranch = branchId || current.branch_id || detail.branch_id || null;
       await host.agent.wake(
         {
           conv_id: run.conversation_id,
           branch_id: selectedBranch,
-          parent_checkpoint_id: detail.checkpoint_id ?? null,
+          // The generic bridge resolves a branch's current head immediately
+          // before submission, after any active turn retry has drained.
+          parent_checkpoint_id: null,
           text: continuationPrompt(current),
           attachments: [],
           contexts: [],

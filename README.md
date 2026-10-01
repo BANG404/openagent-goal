@@ -9,8 +9,8 @@ Agent wake, role, and event modules as every other plugin.
 
 Install or update this package from its GitHub repository in OpenAgent. The
 package uses the portable Agent Plugins 1.0.0 format plus the
-`extensions.openagent` contract. Its optional `runtime` value is update
-provenance only; it does not select a Goal implementation in the Runtime:
+`extensions.openagent` contract. It is an ordinary package; the Runtime does
+not select or implement Goal behavior:
 
 - `commands` declares the `goal` command. The generic package-id alias exposes
   it as `/goal`; `/goal:goal` remains routable as its full name.
@@ -24,10 +24,12 @@ turn; the MCP process owns every later wake and writes state under
 
 ## State
 
-Each conversation gets one run, stored as JSON under `PLUGIN_DATA/runs/`. The
-prompt carries a short run token instead of the conversation, because an MCP
-server runs out of process and is shared across conversations; the model echoes
-that token into `update_goal`, which is how a tool call finds its run.
+Each conversation branch gets one run, stored as JSON under
+`PLUGIN_DATA/runs/`. The prompt carries a short run token as a package-owned
+guard; the generic Runtime also attaches the active conversation and branch to
+every MCP tool call. The server checks all three values before applying
+`update_goal` or `read_goal`, so a token or state record cannot cross a
+conversation branch.
 
 Completion is derived: a run is complete only when its To-Do list is non-empty
 and every To-Do is completed. A `failed`, `blocked`, or `cancelled` status is

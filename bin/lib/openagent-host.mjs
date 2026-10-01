@@ -70,7 +70,10 @@ export function createHostClient({ environment = process.env, fetch: fetchImpl =
     call,
     conversation: {
       create: (args) => call("conversation.create", args),
-      state: (convId) => call("conversation.state", { conv_id: convId }),
+      state: (convId, branchId = undefined) => call("conversation.state", {
+        conv_id: convId,
+        ...(branchId === undefined ? {} : { branch_id: branchId }),
+      }),
       children: (parentConvId, args = {}) =>
         call("conversation.children", { ...args, parent_conv_id: parentConvId }),
       update: (convId, patch) => call("conversation.update", { ...patch, conv_id: convId }),
@@ -113,4 +116,3 @@ export function requireConversationContext(args = {}) {
   if (!value.conversationId) throw new OpenAgentHostError("OpenAgent did not provide a conversation context");
   return value;
 }
-
