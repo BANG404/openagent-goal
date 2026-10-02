@@ -32,7 +32,8 @@ branch. The Stop hook reads `event.conversation_id` and `event.branch_id` from
 the nested automation payload, claims `wake_pending`, and rechecks the run
 before calling the generic `agent.wake` capability. A queued wake must also
 re-check its run token immediately before submission so a replaced run cannot
-continue the wrong state.
+continue the wrong state. The MCP server may queue the same continuation while
+the current tool call is draining; `wake_pending` makes those paths idempotent.
 
 After each mutation the package persists its complete display projection with
 the generic `conversation.flow.set` capability. Runtime never interprets Goal

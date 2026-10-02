@@ -21,7 +21,9 @@ OpenAgent exports `PLUGIN_ROOT`, `PLUGIN_DATA`, and the authenticated host
 bridge variables to every package process. The command starts the first Agent
 turn; the package's Stop automation hook owns later wake decisions through the
 generic `agent.wake` capability. The MCP process keeps a small recovery
-fallback for a package restart and writes state under `PLUGIN_DATA/runs/`.
+fallback for a package restart, and may queue the same wake immediately after
+an `update_goal` call while the turn is still draining. Both paths use the
+same durable marker and write state under `PLUGIN_DATA/runs/`.
 
 ## State
 
@@ -53,7 +55,7 @@ path. When a turn stops, `bin/goal-hook.mjs` reads the nested hook event,
 rechecks the conversation and branch run, and calls `agent.wake` with
 `wait: false`; the host queues the hidden continuation behind an active turn.
 The durable `wake_pending` marker makes the hook idempotent when the MCP
-recovery path has already queued the same run.
+same-process or recovery path has already queued the same run.
 
 Wake scheduling is keyed by conversation and branch. Before a queued wake is
 submitted, the package re-reads the branch run token, so replacing a run cannot
