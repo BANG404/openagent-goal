@@ -19,8 +19,9 @@ not select or implement Goal behavior:
 
 OpenAgent exports `PLUGIN_ROOT`, `PLUGIN_DATA`, and the authenticated host
 bridge variables to every package process. The command starts the first Agent
-turn; the MCP process owns every later wake and writes state under
-`PLUGIN_DATA/runs/`.
+turn; the package's Stop automation hook owns later wake decisions through the
+generic `agent.wake` capability. The MCP process keeps a small recovery
+fallback for a package restart and writes state under `PLUGIN_DATA/runs/`.
 
 ## State
 
@@ -48,9 +49,11 @@ bun test
 ```
 
 Submit `/goal <objective>` after installing the package to exercise the full
-path. The MCP server calls `agent.wake` with `wait: false` after each Goal
-update; the host queues a wake behind an active turn and persists hidden
-continuations in the checkpoint.
+path. When a turn stops, `bin/goal-hook.mjs` reads the nested hook event,
+rechecks the conversation and branch run, and calls `agent.wake` with
+`wait: false`; the host queues the hidden continuation behind an active turn.
+The durable `wake_pending` marker makes the hook idempotent when the MCP
+recovery path has already queued the same run.
 
 Wake scheduling is keyed by conversation and branch. Before a queued wake is
 submitted, the package re-reads the branch run token, so replacing a run cannot

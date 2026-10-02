@@ -7,7 +7,7 @@ description: Use OpenAgent Goal Mode when a task needs durable objectives, progr
 
 Goal Mode is an autonomous loop this package owns. Start it with
 `/goal <objective>` (or `/goal:goal`); the command starts the first turn and the
-package MCP server drives later turns through the generic `agent.wake` bridge.
+package Stop hook drives later turns through the generic `agent.wake` bridge.
 
 The package keeps each conversation's objective, To-Do list, status, and summary
 in its own data directory. The MCP server rebuilds continuation prompts from
@@ -28,9 +28,11 @@ Do not create a separate To-Do file for the Goal: the Goal's own To-Do list is
 the durable record.
 
 The continuation queue is owned by the package and scoped by conversation plus
-branch. A queued wake must re-check its run token immediately before calling
-the generic `agent.wake` capability so a replaced run cannot continue the wrong
-state.
+branch. The Stop hook reads `event.conversation_id` and `event.branch_id` from
+the nested automation payload, claims `wake_pending`, and rechecks the run
+before calling the generic `agent.wake` capability. A queued wake must also
+re-check its run token immediately before submission so a replaced run cannot
+continue the wrong state.
 
 After each mutation the package persists its complete display projection with
 the generic `conversation.flow.set` capability. Runtime never interprets Goal

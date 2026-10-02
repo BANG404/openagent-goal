@@ -21,6 +21,7 @@ import {
   runProjection,
   writeRunFile,
 } from "./lib/goal-state.mjs";
+import { continuationPrompt, flowProjection, publishGoal } from "./lib/goal-bridge.mjs";
 
 const PROTOCOL_VERSION = "2024-11-05";
 const SERVER_NAME = "goal";
@@ -100,52 +101,8 @@ function resolveRun(args) {
   throw new Error("No Goal run matches this conversation, branch, and run token");
 }
 
-function projectionPayload(run) {
-  return {
-    plugin_id: "goal",
-    conv_id: run.conversation_id,
-    flow_id: "plugin:goal:goal",
-    status: run.status,
-    flow: {
-      kind: "plugin",
-      state: {
-        plugin_id: "goal",
-        flow_id: "plugin:goal:goal",
-        ...runProjection(run),
-      },
-    },
-    branch_id: run.branch_id,
-  };
-}
-
 async function emitProjection(run) {
-  const payload = projectionPayload(run);
-  if (run.branch_id) {
-    await host.conversation
-      .setFlow(run.conversation_id, run.branch_id, payload.flow)
-      .catch(() => {});
-  }
-  await host.event.emit("plugin-flow-updated", payload).catch(() => {});
-}
-
-function continuationPrompt(run, previousOutput = "") {
-  const instruction = isTerminal(run)
-    ? `The Goal is finished with status "${run.status}". Start no new work; state the final outcome.`
-    : run.todos.length === 0
-      ? "The Goal still has no To-Dos. Call update_goal now to create a concrete, stable list before continuing."
-      : "Continue the pending or in-progress To-Dos and call update_goal whenever their state changes.";
-  const output = String(previousOutput ?? "").trim();
-  return [
-    "This is a private control continuation from the OpenAgent Goal plugin.",
-    "",
-    `Record progress by calling update_goal with run=\"${run.run_id}\".`,
-    "",
-    `Current Goal state:\n${JSON.stringify(runProjection(run), null, 2)}`,
-    ...(output ? ["", `Previous execution output:\n${output}`] : []),
-    "",
-    instruction,
-    "The Goal completes only after the To-Do list is non-empty and every item is completed.",
-  ].join("\n");
+  await publishGoal(host, run).catch(() => {});
 }
 
 function scheduleWake(run, branchId) {
@@ -199,17 +156,7 @@ function scheduleWake(run, branchId) {
           user_message_id: null,
           assistant_message_id: null,
           hidden: true,
-          flow: {
-            kind: "plugin",
-            state: {
-              plugin_id: "goal",
-              flow_id: "plugin:goal:goal",
-              title: latest.objective,
-              status: latest.status,
-              items: runProjection(latest).items,
-              summary: latest.summary,
-            },
-          },
+          flow: flowProjection(latest),
         },
         { wait: false },
       );
