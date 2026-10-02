@@ -177,9 +177,9 @@ export function createHostClient({
     const name = requiredText(operation, "host operation");
     const requestArgs = { ...jsonObject(args, "host arguments"), plugin_id: identity };
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), requestTimeout);
+    let timer;
     try {
-      const response = await fetchImpl(bridgeUrl, {
+      const request = fetchImpl(bridgeUrl, {
         method: "POST",
         headers: {
           authorization: `Bearer ${bridgeToken}`,
@@ -188,6 +188,15 @@ export function createHostClient({
         body: JSON.stringify({ operation: name, args: requestArgs }),
         signal: controller.signal,
       });
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          const error = new Error(`host operation timed out: ${name}`);
+          error.name = "AbortError";
+          reject(error);
+        }, requestTimeout);
+      });
+      const response = await Promise.race([request, timeout]);
       const body = await response.json().catch(() => ({}));
       if (!response.ok || body?.ok !== true) {
         throw new OpenAgentHostError(
