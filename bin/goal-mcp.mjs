@@ -29,6 +29,10 @@ const root = dataRoot();
 const host = createHostClient();
 const pendingWakes = new Map();
 
+export function wakeScopeKey(conversationId, branchId) {
+  return `${String(conversationId)}\u0000${branchId ?? ""}`;
+}
+
 const TOOLS = [
   {
     name: "update_goal",
@@ -114,8 +118,14 @@ function projectionPayload(run) {
   };
 }
 
-function emitProjection(run) {
-  void host.event.emit("plugin-flow-updated", projectionPayload(run)).catch(() => {});
+async function emitProjection(run) {
+  const payload = projectionPayload(run);
+  if (run.branch_id) {
+    await host.conversation
+      .setFlow(run.conversation_id, run.branch_id, payload.flow)
+      .catch(() => {});
+  }
+  await host.event.emit("plugin-flow-updated", payload).catch(() => {});
 }
 
 function continuationPrompt(run, previousOutput = "") {
@@ -139,29 +149,50 @@ function continuationPrompt(run, previousOutput = "") {
 }
 
 function scheduleWake(run, branchId) {
-  if (isTerminal(run) || pendingWakes.has(run.conversation_id)) return;
+  if (isTerminal(run)) return;
+  const scheduledBranchId = run.branch_id ?? branchId ?? null;
+  const key = wakeScopeKey(run.conversation_id, scheduledBranchId);
+  if (pendingWakes.get(key) === run.run_id) return;
+  pendingWakes.set(key, run.run_id);
   run.wake_pending = true;
   const found = findRunByToken(root, run.run_id);
-  if (found) writeRunFile(found.file, run);
+  if (found && found.run.conversation_id === run.conversation_id && found.run.branch_id === scheduledBranchId) {
+    writeRunFile(found.file, run);
+  }
   let attempt = 0;
   const tick = async () => {
     attempt += 1;
-    const current = readRun(root, run.conversation_id, run.branch_id);
-    if (!current || isTerminal(current)) {
-      pendingWakes.delete(run.conversation_id);
+    const current = readRun(root, run.conversation_id, scheduledBranchId);
+    if (!current || current.run_id !== run.run_id) {
+      if (pendingWakes.get(key) === run.run_id) pendingWakes.delete(key);
+      return;
+    }
+    if (isTerminal(current)) {
+      current.wake_pending = false;
+      const terminalFile = findRunByToken(root, current.run_id);
+      if (terminalFile) writeRunFile(terminalFile.file, current);
+      if (pendingWakes.get(key) === run.run_id) pendingWakes.delete(key);
       return;
     }
     try {
-      const detail = await host.conversation.state(run.conversation_id, current.branch_id);
-      const selectedBranch = branchId || current.branch_id || detail.branch_id || null;
+      const detail = await host.conversation.state(run.conversation_id, scheduledBranchId);
+      // The state lookup can yield while another command replaces this branch's
+      // package run. Re-read the package source of truth before submitting so an
+      // old continuation cannot wake the new run.
+      const latest = readRun(root, run.conversation_id, scheduledBranchId);
+      if (!latest || latest.run_id !== run.run_id || isTerminal(latest)) {
+        if (pendingWakes.get(key) === run.run_id) pendingWakes.delete(key);
+        return;
+      }
+      const selectedBranch = scheduledBranchId || latest.branch_id || detail.branch_id || null;
       await host.agent.wake(
         {
-          conv_id: run.conversation_id,
+          conv_id: latest.conversation_id,
           branch_id: selectedBranch,
           // The generic bridge resolves a branch's current head immediately
           // before submission, after any active turn retry has drained.
           parent_checkpoint_id: null,
-          text: continuationPrompt(current),
+          text: continuationPrompt(latest),
           attachments: [],
           contexts: [],
           model_binding: null,
@@ -173,29 +204,36 @@ function scheduleWake(run, branchId) {
             state: {
               plugin_id: "goal",
               flow_id: "plugin:goal:goal",
-              title: current.objective,
-              status: current.status,
-              items: runProjection(current).items,
-              summary: current.summary,
+              title: latest.objective,
+              status: latest.status,
+              items: runProjection(latest).items,
+              summary: latest.summary,
             },
           },
         },
         { wait: false },
       );
-      current.wake_pending = false;
-      const currentFile = findRunByToken(root, current.run_id);
-      if (currentFile) writeRunFile(currentFile.file, current);
-      pendingWakes.delete(run.conversation_id);
+      const accepted = readRun(root, run.conversation_id, scheduledBranchId);
+      if (accepted?.run_id === run.run_id) {
+        accepted.wake_pending = false;
+        const currentFile = findRunByToken(root, accepted.run_id);
+        if (currentFile) writeRunFile(currentFile.file, accepted);
+      }
+      if (pendingWakes.get(key) === run.run_id) pendingWakes.delete(key);
     } catch (error) {
+      const latest = readRun(root, run.conversation_id, scheduledBranchId);
+      if (!latest || latest.run_id !== run.run_id) {
+        if (pendingWakes.get(key) === run.run_id) pendingWakes.delete(key);
+        return;
+      }
       if (attempt >= 80) {
-        pendingWakes.delete(run.conversation_id);
+        if (pendingWakes.get(key) === run.run_id) pendingWakes.delete(key);
         process.stderr.write(`goal wake failed for ${run.conversation_id}: ${error.message}\n`);
         return;
       }
       setTimeout(() => void tick(), Math.min(1500, 100 + attempt * 100));
     }
   };
-  pendingWakes.set(run.conversation_id, true);
   setTimeout(() => void tick(), 100);
 }
 
@@ -207,9 +245,14 @@ async function recoverRunningRuns() {
     try {
       const parsed = JSON.parse(readFileSync(path.join(directory, entry), "utf8"));
       if (parsed?.status !== "running" || !parsed?.conversation_id) continue;
+      const stored = readRun(root, parsed.conversation_id, parsed.branch_id ?? null);
+      if (!stored || stored.run_id !== parsed.run_id) continue;
       if (!parsed.wake_pending) {
         try {
-          const detail = await host.conversation.state(parsed.conversation_id);
+          const detail = await host.conversation.state(
+            stored.conversation_id,
+            stored.branch_id ?? undefined,
+          );
           // A before-completion checkpoint means the Agent is still in the
           // turn that owns this run. Let it finish before recovering; a final
           // checkpoint with a running Goal means the process stopped after the
@@ -220,7 +263,7 @@ async function recoverRunningRuns() {
           // package state recoverable and retry through the normal wake path.
         }
       }
-      scheduleWake(parsed, parsed.branch_id || null);
+      scheduleWake(stored, stored.branch_id || null);
     } catch {
       // A malformed package state file is ignored; the next command can repair it.
     }
@@ -233,7 +276,7 @@ async function callTool(name, args) {
     applyGoalUpdate(found.run, args ?? {});
     found.run.iteration += 1;
     writeRunFile(found.file, found.run);
-    emitProjection(found.run);
+    await emitProjection(found.run);
     if (!isTerminal(found.run)) scheduleWake(found.run, conversationContext(args).branchId);
     return JSON.stringify({ ...runProjection(found.run), run_id: found.run.run_id });
   }

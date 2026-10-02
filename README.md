@@ -44,12 +44,21 @@ checkout, pointing at this directory.
 
 ```bash
 bun <plugin-kit>/scripts/validate-plugin.mjs .
+bun test
 ```
 
 Submit `/goal <objective>` after installing the package to exercise the full
 path. The MCP server calls `agent.wake` with `wait: false` after each Goal
 update; the host queues a wake behind an active turn and persists hidden
 continuations in the checkpoint.
+
+Wake scheduling is keyed by conversation and branch. Before a queued wake is
+submitted, the package re-reads the branch run token, so replacing a run cannot
+make an older continuation advance the new run.
+
+The package also calls the generic `conversation.flow.set` capability after
+each state mutation. The host stores only the opaque display projection; the
+Goal files remain the package's source of truth.
 
 ## License
 

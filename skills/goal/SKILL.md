@@ -26,3 +26,12 @@ the run token the Goal prompt supplied:
 
 Do not create a separate To-Do file for the Goal: the Goal's own To-Do list is
 the durable record.
+
+The continuation queue is owned by the package and scoped by conversation plus
+branch. A queued wake must re-check its run token immediately before calling
+the generic `agent.wake` capability so a replaced run cannot continue the wrong
+state.
+
+After each mutation the package persists its complete display projection with
+the generic `conversation.flow.set` capability. Runtime never interprets Goal
+fields; `PLUGIN_DATA` remains authoritative.

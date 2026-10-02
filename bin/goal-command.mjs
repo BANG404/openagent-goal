@@ -39,19 +39,23 @@ async function main() {
   writeRun(dataRoot(), run);
 
   const { branchId } = context({ _openagent: { conversation_id: conversationId, branch_id: run.branch_id } });
+  const flow = {
+    kind: "plugin",
+    state: {
+      plugin_id: "goal",
+      flow_id: "plugin:goal:goal",
+      ...runProjection(run),
+    },
+  };
+  if (branchId) {
+    await host.conversation.setFlow(conversationId, branchId, flow);
+  }
   await host.event.emit("plugin-flow-updated", {
     plugin_id: "goal",
     conv_id: conversationId,
     flow_id: "plugin:goal:goal",
     status: run.status,
-    flow: {
-      kind: "plugin",
-      state: {
-        plugin_id: "goal",
-        flow_id: "plugin:goal:goal",
-        ...runProjection(run),
-      },
-    },
+    flow,
     branch_id: branchId,
   });
   process.stdout.write(promptFor(run));

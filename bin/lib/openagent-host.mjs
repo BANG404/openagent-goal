@@ -79,6 +79,11 @@ export function createHostClient({ environment = process.env, fetch: fetchImpl =
       update: (convId, patch) => call("conversation.update", { ...patch, conv_id: convId }),
       cancel: (convId) => call("conversation.cancel", { conv_id: convId }),
       delete: (convId) => call("conversation.delete", { conv_id: convId }),
+      setFlow: (convId, branchId, flow) => call("conversation.flow.set", {
+        conv_id: convId,
+        branch_id: branchId,
+        flow,
+      }),
     },
     branch: {
       create: (args) => call("branch.create", args),
