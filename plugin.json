@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "goal",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Persistent goal execution with an autonomous continuation loop.",
   "license": "MIT",
   "repository": "https://github.com/BANG404/openagent-goal",
@@ -13,8 +13,8 @@
         {
           "id": "goal",
           "label": "Goal",
-          "description": "Work an objective to completion across turns.",
-          "argument": "required_text",
+          "description": "View, set, edit, pause, resume or clear a persistent objective.",
+          "argument": "optional_text",
           "command": "bin/goal-command.mjs",
           "timeout_secs": 30
         },

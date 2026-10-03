@@ -9,6 +9,32 @@ Goal Mode is an autonomous loop this package owns. Start it with
 `/goal <objective>` (or `/goal:goal`); the command starts the first turn and the
 package Stop hook drives later turns through the generic `agent.wake` bridge.
 
+## Lifecycle controls
+
+`/goal [<objective>|clear|edit|pause|resume]` and `/goal:goal` share the same
+package entry point. Bare `/goal` reports the current branch's Goal. The
+objective must contain 1–4000 characters. `pause` preserves progress and stops
+continuation; `resume` continues paused, blocked, or inspected running work.
+`edit <objective>` retains evidence, resets each To-Do to pending for review,
+and pauses. Bare `edit` pauses and asks for revised objective text. `clear`
+removes the current objective and list while keeping an empty durable tombstone
+to reject stale calls; conversation history remains intact. `/goal cancel`
+and `/goal:cancel` permanently stop a run while preserving its progress.
+
+The Agent `goal` tool accepts `action: view|set|edit|pause|resume|clear|cancel`
+with optional `objective` and `run`. View returns the current token without
+requiring one. Mutations of existing state require its token; lifecycle changes
+rotate it. Use lifecycle mutations only when requested by the user. Continue
+set/resume work in the current turn; the tool never queues a competing turn.
+
+Command view/edit/pause/clear confirmations do no Goal work. Inspection retains
+the displayed status but disables automatic continuation and restart recovery
+until explicit resume or a substantive progress update. Paused, cleared and
+cancelled states reject progress updates and never recover automatically.
+Every hidden continuation first reads its addressed token and stops on stale or
+inactive state. A cancelled confirmation turn cannot overwrite a paused or
+cleared state. Edits require checking preserved evidence against the new target.
+
 The package keeps each conversation's objective, To-Do list, status, and summary
 in its own data directory. The MCP server rebuilds continuation prompts from
 that state, so the loop survives context compaction and a Runtime restart.
@@ -25,7 +51,7 @@ the run token the Goal prompt supplied:
 - `read_goal` returns the same projection the Goal panel shows.
 - `cancel_goal` permanently stops the addressed run while preserving its list.
   Users can also use `/goal:cancel`; a cancelled run rejects further updates.
-  Start a new `/goal` to work again.
+  Start a new `/goal <objective>` to work again.
 
 Do not create a separate To-Do file for the Goal: the Goal's own To-Do list is
 the durable record.

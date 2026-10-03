@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { createHostClient, hookEvent } from "./lib/openagent-host.mjs";
 import { continuationPrompt, flowProjection, publishGoal } from "./lib/goal-bridge.mjs";
-import { dataRoot, isTerminal, readRun, withRunLock, writeRun } from "./lib/goal-state.mjs";
+import { canContinue, dataRoot, isTerminal, readRun, withRunLock, writeRun } from "./lib/goal-state.mjs";
 
 export function readHookInput(text) {
   try {
@@ -28,7 +28,7 @@ export async function continueFromStop(payload, { root = dataRoot(), client = cr
   if (!conversationId || !branchId) return { accepted: false, reason: "missing_context" };
   return withRunLock(root, conversationId, branchId, async () => {
     const run = readRun(root, conversationId, branchId);
-    if (run && event.phase === "final_cancelled") {
+    if (run && run.status === "running" && event.phase === "final_cancelled") {
       run.status = "cancelled";
       run.wake_pending = false;
       writeRun(root, run);
@@ -46,6 +46,7 @@ export async function continueFromStop(payload, { root = dataRoot(), client = cr
     if (!run || isTerminal(run) || run.wake_pending) {
       return { accepted: false, reason: !run ? "missing_run" : isTerminal(run) ? "terminal" : "wake_pending" };
     }
+    if (!canContinue(run)) return { accepted: false, reason: "paused_or_inspection" };
 
     run.wake_pending = true;
     run.iteration += 1;

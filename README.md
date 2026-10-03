@@ -2,7 +2,7 @@
 
 The standard Agent Plugin package for OpenAgent Goal Mode. The package owns the
 whole capability: continuation decisions, Goal state (objective, To-Do list,
-status, and summary), `update_goal`/`read_goal`, recovery, and the display
+status, and summary), lifecycle controls, progress tools, recovery, and the display
 projection. OpenAgent supplies only the generic host bridge and one ordinary
 Agent execution boundary. The package uses the same conversation, branch,
 Agent wake, role, and event modules as every other plugin.
@@ -26,6 +26,14 @@ the current turn is executing or waiting for approval. Recovery only wakes a
 normally completed turn; interrupted turns wait for the user's answer.
 
 ## State
+
+Use `/goal [<objective>|clear|edit|pause|resume]`: bare `/goal` shows status,
+`pause` retains progress, `resume` continues, and `clear` removes the current
+objective. `/goal edit <objective>` pauses with the revised target and retains
+results for revalidation; bare `edit` asks for the new target. Agent tools expose
+the same actions through `goal({ action, objective?, run? })`. Read the current
+token with `action: "view"` before mutating existing state. See the bundled
+Goal skill for lifecycle authority and continuation rules.
 
 Each conversation branch gets one run, stored as JSON under
 `PLUGIN_DATA/runs/`. The prompt carries a short run token as a package-owned

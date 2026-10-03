@@ -11,22 +11,23 @@
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { context, createHostClient, requireConversationContext } from "./lib/openagent-host.mjs";
+import { createHostClient, requireConversationContext } from "./lib/openagent-host.mjs";
 import {
   applyGoalUpdate,
+  canContinue,
   dataRoot,
   findRunByToken,
-  isTerminal,
   readRun,
   runProjection,
   withRunLock,
   writeRunFile,
 } from "./lib/goal-state.mjs";
 import { continuationPrompt, flowProjection, publishGoal } from "./lib/goal-bridge.mjs";
+import { controlGoal, GOAL_ACTIONS } from "./lib/goal-control.mjs";
 
 const PROTOCOL_VERSION = "2024-11-05";
 const SERVER_NAME = "goal";
-const SERVER_VERSION = "2.1.0";
+const SERVER_VERSION = "2.2.0";
 const root = dataRoot();
 const host = createHostClient();
 const pendingWakes = new Map();
@@ -37,9 +38,23 @@ export function wakeScopeKey(conversationId, branchId) {
 
 const TOOLS = [
   {
+    name: "goal",
+    description: "View, set, edit, pause, resume, clear or cancel the current branch Goal. Use lifecycle mutations only when the user requests them. View returns the current run_id; pass it to mutations and use the returned new token for subsequent calls. Set starts a new objective. Edit preserves evidence, resets To-Dos for review and pauses. Resume continues in the current turn; no competing turn is queued.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        action: { type: "string", enum: GOAL_ACTIONS },
+        objective: { type: "string", minLength: 1, maxLength: 4000, description: "Required for set; optional for edit (omitting it pauses for user input)" },
+        run: { type: "string", description: "Current generation token, required for mutations when state already exists" },
+      },
+      required: ["action"],
+    },
+  },
+  {
     name: "update_goal",
     description:
-      "Replace the Goal's complete To-Do list and record progress. Pass the run token from the Goal prompt. The package wakes the next turn when the Goal remains active.",
+      "Replace the Goal's complete To-Do list and record progress. Pass the current run token. Only the Stop hook continues an active Goal after this turn ends; paused, cleared or cancelled Goals reject progress updates.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -117,7 +132,7 @@ async function emitProjection(run) {
 }
 
 function scheduleWake(run, branchId) {
-  if (isTerminal(run)) return;
+  if (!canContinue(run)) return;
   const scheduledBranchId = run.branch_id ?? branchId ?? null;
   const key = wakeScopeKey(run.conversation_id, scheduledBranchId);
   if (pendingWakes.get(key) === run.run_id) return;
@@ -131,7 +146,7 @@ function scheduleWake(run, branchId) {
         if (pendingWakes.get(key) === run.run_id) pendingWakes.delete(key);
         return;
       }
-      if (isTerminal(current)) {
+      if (!canContinue(current)) {
         current.wake_pending = false;
         const terminalFile = findRunByToken(root, current.run_id);
         if (terminalFile) writeRunFile(terminalFile.file, current);
@@ -151,7 +166,7 @@ function scheduleWake(run, branchId) {
         // package run. Re-read the package source of truth before submitting so an
         // old continuation cannot wake the new run.
         const latest = readRun(root, run.conversation_id, scheduledBranchId);
-        if (!latest || latest.run_id !== run.run_id || isTerminal(latest)) {
+        if (!latest || latest.run_id !== run.run_id || !canContinue(latest)) {
           if (pendingWakes.get(key) === run.run_id) pendingWakes.delete(key);
           return;
         }
@@ -208,7 +223,7 @@ async function recoverRunningRuns() {
       const parsed = JSON.parse(readFileSync(path.join(directory, entry), "utf8"));
       if (parsed?.status !== "running" || !parsed?.conversation_id) continue;
       const stored = readRun(root, parsed.conversation_id, parsed.branch_id ?? null);
-      if (!stored || stored.run_id !== parsed.run_id) continue;
+      if (!stored || stored.run_id !== parsed.run_id || !canContinue(stored)) continue;
       {
         try {
           const detail = await host.conversation.state(
@@ -230,16 +245,18 @@ async function recoverRunningRuns() {
 
 async function callTool(name, args) {
   const { conversationId, branchId } = conversationContext(args);
+  if (name === "goal" || name === "cancel_goal") {
+    const result = await controlGoal({ root, host, conversationId, branchId,
+      action: name === "cancel_goal" ? "cancel" : args.action,
+      objective: args.objective, run: args.run,
+    });
+    if (result.action !== "view") pendingWakes.delete(wakeScopeKey(conversationId, branchId));
+    // The calling Agent continues set/resume in its owning turn. The hook
+    // takes over only after normal completion, preserving pending approvals.
+    return JSON.stringify({ action: result.action, goal: result.goal, run_id: result.run_id,
+      ...(result.action === "set" || result.action === "resume" ? { instruction: result.prompt } : {}) });
+  }
   return withRunLock(root, conversationId, branchId, async () => {
-    if (name === "cancel_goal") {
-      const found = resolveRun(args);
-      found.run.status = "cancelled";
-      found.run.wake_pending = false;
-      writeRunFile(found.file, found.run);
-      pendingWakes.delete(wakeScopeKey(conversationId, branchId));
-      await emitProjection(found.run);
-      return JSON.stringify({ ...runProjection(found.run), run_id: found.run.run_id });
-    }
     if (name === "update_goal") {
       const found = resolveRun(args);
       applyGoalUpdate(found.run, args ?? {});

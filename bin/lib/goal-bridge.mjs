@@ -60,6 +60,7 @@ export function continuationPrompt(run, previousOutput = "") {
     "This is a private control continuation from the OpenAgent Goal plugin.",
     "",
     `Record progress by calling update_goal with run=\"${run.run_id}\".`,
+    "Before doing work, call the goal tool with action=view and this run token. If the token is stale, or the Goal is paused, cleared or cancelled, stop this continuation. Reuse preserved evidence only after checking it against the current objective.",
     "",
     `Current Goal state:\n${JSON.stringify(runProjection(run), null, 2)}`,
     ...(output ? ["", `Previous execution output:\n${output}`] : []),

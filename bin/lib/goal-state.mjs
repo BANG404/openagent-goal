@@ -20,7 +20,7 @@ import path from "node:path";
 export const TODO_STATUSES = ["pending", "in_progress", "completed"];
 /** Statuses a package may set directly; `completed` is always derived. */
 export const FINAL_STATUSES = ["failed", "blocked", "cancelled"];
-export const RUN_STATUSES = ["running", "completed", ...FINAL_STATUSES];
+export const RUN_STATUSES = ["running", "completed", "paused", "cleared", ...FINAL_STATUSES];
 
 /** How many finished runs to keep before pruning the oldest. */
 const KEPT_RUNS = 50;
@@ -74,6 +74,7 @@ export function newRun({ conversationId, objective }) {
     iteration: 0,
     updated_at: Date.now(),
     wake_pending: false,
+    continuation_enabled: true,
   };
 }
 
@@ -83,7 +84,7 @@ export function newRun({ conversationId, objective }) {
  * model reported is sticky.
  */
 export function reconcileRun(run) {
-  if (FINAL_STATUSES.includes(run.status)) {
+  if (FINAL_STATUSES.includes(run.status) || ["paused", "cleared"].includes(run.status)) {
     return run;
   }
   const settled = run.todos.length > 0 && run.todos.every((todo) => todo.status === "completed");
@@ -92,7 +93,11 @@ export function reconcileRun(run) {
 }
 
 export function isTerminal(run) {
-  return FINAL_STATUSES.includes(run.status) || run.status === "completed";
+  return FINAL_STATUSES.includes(run.status) || ["completed", "cleared"].includes(run.status);
+}
+
+export function canContinue(run) {
+  return run.status === "running" && run.continuation_enabled !== false;
 }
 
 export function readRun(root, conversationId, branchId = null) {
@@ -206,7 +211,7 @@ export async function withRunLock(root, conversationId, branchId, action) {
  * forever.
  */
 export function applyGoalUpdate(run, update) {
-  if (run.status === "cancelled") throw new Error("This Goal was cancelled; start a new /goal to work again");
+  if (["cancelled", "cleared", "paused"].includes(run.status)) throw new Error(`This Goal is ${run.status}; use the goal lifecycle tool before updating progress`);
   if (typeof update.objective === "string" && update.objective.trim() !== "") {
     run.objective = update.objective.trim();
   }
@@ -234,6 +239,7 @@ export function applyGoalUpdate(run, update) {
     }
   }
   reconcileRun(run);
+  run.continuation_enabled = true;
   return run;
 }
 
@@ -271,6 +277,7 @@ function normalizeStoredRun(run) {
     iteration: Number.isInteger(run?.iteration) ? run.iteration : 0,
     updated_at: Number.isFinite(run?.updated_at) ? run.updated_at : Date.now(),
     wake_pending: Boolean(run?.wake_pending),
+    continuation_enabled: run?.continuation_enabled !== false,
   };
 }
 
