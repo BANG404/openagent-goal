@@ -3,12 +3,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { newRun, writeRun } from "../bin/lib/goal-state.mjs";
+import { newRun, readRun, writeRun } from "../bin/lib/goal-state.mjs";
 
 const packageRoot = path.resolve(import.meta.dirname, "..");
 const mcpScript = path.join(packageRoot, "bin", "goal-mcp.mjs");
 
-async function startHost() {
+async function startHost({ phase = "final_completed" } = {}) {
   const requests = [];
   const server = createServer(async (request, response) => {
     let body = "";
@@ -18,7 +18,7 @@ async function startHost() {
     let result = {};
     if (parsed.operation === "conversation.state") {
       result = {
-        phase: "final_completed",
+        phase,
         branch_id: parsed.args.branch_id ?? null,
         workspace: "",
       };
@@ -120,7 +120,7 @@ async function waitFor(predicate, timeoutMs = 2000) {
 }
 
 describe("Goal package wake scheduling", () => {
-  test("does not suppress wakes for sibling branches", async () => {
+  test("progress updates do not queue a competing wake on sibling branches", async () => {
     const dataRoot = mkdtempSync(path.join(tmpdir(), "openagent-goal-"));
     const host = await startHost();
     const mcp = await startMcp(dataRoot, host.url);
@@ -133,17 +133,35 @@ describe("Goal package wake scheduling", () => {
         mcp.callTool("update_goal", updateArgs("conversation", "branch-a", first.run_id)),
         mcp.callTool("update_goal", updateArgs("conversation", "branch-b", second.run_id)),
       ]);
-      await waitFor(
-        () =>
-          host.requests.filter((request) => request.operation === "agent.wake").length === 2,
-      );
+      await new Promise((resolve) => setTimeout(resolve, 180));
       expect(
         host.requests
           .filter((request) => request.operation === "agent.wake")
           .map((request) => request.args.branch_id)
           .sort(),
-      ).toEqual(["branch-a", "branch-b"]);
+      ).toEqual([]);
       expect(host.requests.filter((request) => request.operation === "conversation.flow.set")).toHaveLength(2);
+    } finally {
+      await mcp.stop();
+      await host.close();
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("cancel_goal preserves progress and rejects later updates", async () => {
+    const dataRoot = mkdtempSync(path.join(tmpdir(), "openagent-goal-"));
+    const host = await startHost();
+    const mcp = await startMcp(dataRoot, host.url);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 160));
+      const run = makeRun(dataRoot, "conversation", "branch");
+      const args = updateArgs("conversation", "branch", run.run_id);
+      await mcp.callTool("update_goal", args);
+      const cancelled = await mcp.callTool("cancel_goal", { run: run.run_id, _openagent: args._openagent });
+      expect(cancelled.result.isError).toBe(false);
+      expect(readRun(dataRoot, "conversation", "branch")).toMatchObject({ status: "cancelled", todos: [{ id: "work" }], wake_pending: false });
+      expect((await mcp.callTool("update_goal", args)).result.isError).toBe(true);
+      expect(host.requests.filter((request) => request.operation === "agent.wake")).toHaveLength(0);
     } finally {
       await mcp.stop();
       await host.close();
@@ -154,17 +172,33 @@ describe("Goal package wake scheduling", () => {
   test("drops a queued wake when the branch run token is replaced", async () => {
     const dataRoot = mkdtempSync(path.join(tmpdir(), "openagent-goal-"));
     const host = await startHost();
+    makeRun(dataRoot, "conversation", "branch");
     const mcp = await startMcp(dataRoot, host.url);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 160));
-      const oldRun = makeRun(dataRoot, "conversation", "branch");
-      await mcp.callTool("update_goal", updateArgs("conversation", "branch", oldRun.run_id));
+      await waitFor(() => host.requests.some((request) => request.operation === "conversation.state"));
       // Replace the package-owned run before the scheduled tick reaches the
       // host. The old continuation must not wake the replacement run.
       await new Promise((resolve) => setTimeout(resolve, 20));
       makeRun(dataRoot, "conversation", "branch");
       await new Promise((resolve) => setTimeout(resolve, 260));
       expect(host.requests.filter((request) => request.operation === "agent.wake")).toHaveLength(0);
+    } finally {
+      await mcp.stop();
+      await host.close();
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("startup recovery leaves an interrupted approval untouched", async () => {
+    const dataRoot = mkdtempSync(path.join(tmpdir(), "openagent-goal-"));
+    const host = await startHost({ phase: "interrupted" });
+    const run = makeRun(dataRoot, "conversation", "branch");
+    const mcp = await startMcp(dataRoot, host.url);
+    try {
+      await waitFor(() => host.requests.some((request) => request.operation === "conversation.state"));
+      await new Promise((resolve) => setTimeout(resolve, 180));
+      expect(host.requests.filter((request) => request.operation === "agent.wake")).toHaveLength(0);
+      expect(readRun(dataRoot, "conversation", "branch").run_id).toBe(run.run_id);
     } finally {
       await mcp.stop();
       await host.close();

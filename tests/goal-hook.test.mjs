@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { continueFromStop } from "../bin/goal-hook.mjs";
-import { newRun, readRun, writeRun } from "../bin/lib/goal-state.mjs";
+import { newRun, readRun, withRunLock, writeRun } from "../bin/lib/goal-state.mjs";
 
 function makeRun(root, branchId, status = "running") {
   const run = newRun({ conversationId: "conversation", objective: `Goal ${branchId}` });
@@ -39,6 +39,57 @@ function fakeHost(requests, { failWake = false } = {}) {
 }
 
 describe("Goal package Stop hook", () => {
+  test("a concurrent progress change survives a slow Stop hook", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openagent-goal-hook-"));
+    try {
+      makeRun(root, "branch");
+      let release;
+      let entered;
+      const waiting = new Promise(resolve => { entered = resolve; });
+      const gate = new Promise(resolve => { release = resolve; });
+      const host = fakeHost([]);
+      host.conversation.state = async () => { entered(); await gate; return {}; };
+      const stopping = continueFromStop({ event: { conversation_id: "conversation", branch_id: "branch", phase: "final_completed" } }, { root, client: host });
+      await waiting;
+      const update = withRunLock(root, "conversation", "branch", async () => {
+        const latest = readRun(root, "conversation", "branch");
+        latest.status = "blocked";
+        latest.summary = "Needs a user decision";
+        writeRun(root, latest);
+      });
+      release();
+      await Promise.all([stopping, update]);
+      expect(readRun(root, "conversation", "branch")).toMatchObject({ status: "blocked", summary: "Needs a user decision" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  test("does not wake while approval or user input is interrupted", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openagent-goal-hook-"));
+    try {
+      makeRun(root, "branch");
+      const requests = [];
+      expect(await continueFromStop({ event: { conversation_id: "conversation", branch_id: "branch", phase: "interrupted" } }, { root, client: fakeHost(requests) })).toMatchObject({ accepted: false, reason: "awaiting_input" });
+      expect(requests).toHaveLength(0);
+      expect(readRun(root, "conversation", "branch").status).toBe("running");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a user stop durably cancels the Goal and prevents subsequent wakes", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openagent-goal-hook-"));
+    try {
+      makeRun(root, "branch");
+      const requests = [];
+      await continueFromStop({ event: { conversation_id: "conversation", branch_id: "branch", phase: "final_cancelled" } }, { root, client: fakeHost(requests) });
+      expect(readRun(root, "conversation", "branch").status).toBe("cancelled");
+      await continueFromStop({ event: { conversation_id: "conversation", branch_id: "branch", phase: "final_completed" } }, { root, client: fakeHost(requests) });
+      expect(requests.filter((request) => request.operation === "agent.wake")).toHaveLength(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   test("reads the nested event and wakes only the selected branch", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openagent-goal-hook-"));
     try {

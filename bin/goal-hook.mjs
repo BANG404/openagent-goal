@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { createHostClient, hookEvent } from "./lib/openagent-host.mjs";
 import { continuationPrompt, flowProjection, publishGoal } from "./lib/goal-bridge.mjs";
-import { dataRoot, isTerminal, readRun, writeRun } from "./lib/goal-state.mjs";
+import { dataRoot, isTerminal, readRun, withRunLock, writeRun } from "./lib/goal-state.mjs";
 
 export function readHookInput(text) {
   try {
@@ -26,52 +26,66 @@ export async function continueFromStop(payload, { root = dataRoot(), client = cr
   const conversationId = String(event.conversation_id ?? event.conversationId ?? "").trim();
   const branchId = String(event.branch_id ?? event.branchId ?? "").trim();
   if (!conversationId || !branchId) return { accepted: false, reason: "missing_context" };
-
-  const run = readRun(root, conversationId, branchId);
-  // A command or the MCP process may already have queued a continuation. The
-  // durable marker makes this hook idempotent across concurrent Stop hooks.
-  if (!run || isTerminal(run) || run.wake_pending) {
-    return { accepted: false, reason: !run ? "missing_run" : isTerminal(run) ? "terminal" : "wake_pending" };
-  }
-
-  run.wake_pending = true;
-  run.iteration += 1;
-  writeRun(root, run);
-  try {
-    let previousOutput = "";
-    try {
-      const detail = await client.conversation.state(conversationId, branchId);
-      const messages = Array.isArray(detail?.messages) ? detail.messages : [];
-      previousOutput = [...messages].reverse().find((message) => message.role === "assistant")?.text ?? "";
-    } catch {
-      // A stop hook must still be able to queue the continuation if the
-      // optional state projection is temporarily unavailable.
+  return withRunLock(root, conversationId, branchId, async () => {
+    const run = readRun(root, conversationId, branchId);
+    if (run && event.phase === "final_cancelled") {
+      run.status = "cancelled";
+      run.wake_pending = false;
+      writeRun(root, run);
+      await publishGoal(client, run);
+      return { accepted: false, reason: "cancelled" };
     }
-    await publishGoal(client, run).catch(() => {});
-    await client.agent.wake(
-      {
-        conv_id: conversationId,
-        branch_id: branchId,
-        parent_checkpoint_id: null,
-        text: continuationPrompt(run, previousOutput),
-        attachments: [],
-        contexts: [],
-        model_binding: null,
-        user_message_id: null,
-        assistant_message_id: null,
-        hidden: true,
-        flow: flowProjection(run),
-      },
-      { wait: false },
-    );
-    run.wake_pending = false;
+    if (event.phase === "interrupted" || event.phase === "before_completion") {
+      return { accepted: false, reason: "awaiting_input" };
+    }
+    if (event.phase === "final_failed") {
+      return { accepted: false, reason: "execution_failed" };
+    }
+    // A command or the MCP process may already have queued a continuation. The
+    // durable marker makes this hook idempotent across concurrent Stop hooks.
+    if (!run || isTerminal(run) || run.wake_pending) {
+      return { accepted: false, reason: !run ? "missing_run" : isTerminal(run) ? "terminal" : "wake_pending" };
+    }
+
+    run.wake_pending = true;
+    run.iteration += 1;
     writeRun(root, run);
-    return { accepted: true, conversationId, branchId, runId: run.run_id };
-  } catch (error) {
-    run.wake_pending = false;
-    writeRun(root, run);
-    throw error;
-  }
+    try {
+      let previousOutput = "";
+      try {
+        const detail = await client.conversation.state(conversationId, branchId);
+        const messages = Array.isArray(detail?.messages) ? detail.messages : [];
+        previousOutput = [...messages].reverse().find((message) => message.role === "assistant")?.text ?? "";
+      } catch {
+        // A stop hook must still be able to queue the continuation if the
+        // optional state projection is temporarily unavailable.
+      }
+      await publishGoal(client, run).catch(() => {});
+      await client.agent.wake(
+        {
+          conv_id: conversationId,
+          branch_id: branchId,
+          parent_checkpoint_id: null,
+          text: continuationPrompt(run, previousOutput),
+          attachments: [],
+          contexts: [],
+          model_binding: null,
+          user_message_id: null,
+          assistant_message_id: null,
+          hidden: true,
+          flow: flowProjection(run),
+        },
+        { wait: false },
+      );
+      run.wake_pending = false;
+      writeRun(root, run);
+      return { accepted: true, conversationId, branchId, runId: run.run_id };
+    } catch (error) {
+      run.wake_pending = false;
+      writeRun(root, run);
+      throw error;
+    }
+  });
 }
 
 async function main() {

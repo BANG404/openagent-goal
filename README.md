@@ -21,9 +21,9 @@ OpenAgent exports `PLUGIN_ROOT`, `PLUGIN_DATA`, and the authenticated host
 bridge variables to every package process. The command starts the first Agent
 turn; the package's Stop automation hook owns later wake decisions through the
 generic `agent.wake` capability. The MCP process keeps a small recovery
-fallback for a package restart, and may queue the same wake immediately after
-an `update_goal` call while the turn is still draining. Both paths use the
-same durable marker and write state under `PLUGIN_DATA/runs/`.
+fallback for a package restart. Progress tools do not queue another turn while
+the current turn is executing or waiting for approval. Recovery only wakes a
+normally completed turn; interrupted turns wait for the user's answer.
 
 ## State
 
@@ -37,6 +37,22 @@ conversation branch.
 Completion is derived: a run is complete only when its To-Do list is non-empty
 and every To-Do is completed. A `failed`, `blocked`, or `cancelled` status is
 sticky, and the model cannot declare a Goal complete over unfinished work.
+
+## Stop a Goal
+
+Use `/goal:cancel` to cancel the current branch's Goal, or `cancel_goal` with
+its run token. The command changes durable state before asking the Agent to
+confirm; it does not rely on a model tool call. The composer's Stop action also
+cancels the Goal when the Runtime reports `final_cancelled` to its Stop hook.
+Cancelled Goals retain their To-Dos and results, reject subsequent progress
+updates, and never auto-resume after restarting the package. Start a new
+`/goal <objective>` to begin again.
+
+The Stop hook consumes the generic lifecycle `phase`: `interrupted` waits for
+approval/input, `final_cancelled` cancels, and `final_failed` does not wake.
+All command, hook, MCP, and recovery state mutations serialize through a
+per-branch filesystem lock and atomically replace the JSON file. A hook cannot
+overwrite progress recorded during an asynchronous host request.
 
 ## Development
 
@@ -54,8 +70,8 @@ Submit `/goal <objective>` after installing the package to exercise the full
 path. When a turn stops, `bin/goal-hook.mjs` reads the nested hook event,
 rechecks the conversation and branch run, and calls `agent.wake` with
 `wait: false`; the host queues the hidden continuation behind an active turn.
-The durable `wake_pending` marker makes the hook idempotent when the MCP
-same-process or recovery path has already queued the same run.
+The durable `wake_pending` marker guards a pending continuation; normal MCP
+progress updates never queue another turn alongside the Stop hook.
 
 Wake scheduling is keyed by conversation and branch. Before a queued wake is
 submitted, the package re-reads the branch run token, so replacing a run cannot

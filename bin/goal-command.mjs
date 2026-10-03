@@ -2,7 +2,7 @@
 
 import { readFileSync } from "node:fs";
 import { createHostClient } from "./lib/openagent-host.mjs";
-import { dataRoot, newRun, writeRun } from "./lib/goal-state.mjs";
+import { dataRoot, newRun, withRunLock, writeRun } from "./lib/goal-state.mjs";
 import { bootstrapPrompt, publishGoal } from "./lib/goal-bridge.mjs";
 
 const host = createHostClient();
@@ -23,9 +23,10 @@ async function main() {
 
   const run = newRun({ conversationId, objective });
   run.branch_id = String(input?.branch_id ?? "").trim() || null;
-  writeRun(dataRoot(), run);
-
-  await publishGoal(host, run).catch(() => {});
+  await withRunLock(dataRoot(), conversationId, run.branch_id, async () => {
+    writeRun(dataRoot(), run);
+    await publishGoal(host, run);
+  });
   process.stdout.write(bootstrapPrompt(run));
 }
 

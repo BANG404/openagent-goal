@@ -14,7 +14,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 export const TODO_STATUSES = ["pending", "in_progress", "completed"];
@@ -121,7 +121,7 @@ export function writeRun(root, run) {
   const directory = runsDir(root);
   mkdirSync(directory, { recursive: true });
   const file = runFile(root, run.conversation_id, run.branch_id);
-  writeFileSync(file, `${JSON.stringify(run, null, 2)}\n`, "utf8");
+  writeRunFile(file, run);
   pruneRuns(directory, file);
 }
 
@@ -148,7 +148,54 @@ export function findRunByToken(root, token) {
 export function writeRunFile(file, run) {
   run.updated_at = Date.now();
   reconcileRun(run);
-  writeFileSync(file, `${JSON.stringify(run, null, 2)}\n`, "utf8");
+  const temporary = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  try {
+    writeFileSync(temporary, `${JSON.stringify(run, null, 2)}\n`, "utf8");
+    renameSync(temporary, file);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+}
+
+/** Serialize branch mutations across command, hook, and MCP processes. */
+export async function withRunLock(root, conversationId, branchId, action) {
+  const directory = runsDir(root);
+  mkdirSync(directory, { recursive: true });
+  const lock = `${runFile(root, conversationId, branchId)}.lock`;
+  const deadline = Date.now() + 30000;
+  while (true) {
+    try {
+      mkdirSync(lock);
+      try {
+        writeFileSync(path.join(lock, "owner.json"), JSON.stringify({ pid: process.pid }), "utf8");
+      } catch (error) {
+        rmSync(lock, { recursive: true });
+        throw error;
+      }
+      break;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      let abandoned = false;
+      try {
+        const owner = JSON.parse(readFileSync(path.join(lock, "owner.json"), "utf8"));
+        try { process.kill(owner.pid, 0); } catch (error) { abandoned = error.code === "ESRCH"; }
+      } catch {
+        try { abandoned = Date.now() - statSync(lock).mtimeMs > 30000; } catch { continue; }
+      }
+      if (abandoned) {
+        const stale = `${lock}.stale-${process.pid}-${randomBytes(4).toString("hex")}`;
+        try { renameSync(lock, stale); rmSync(stale, { recursive: true }); } catch {}
+        continue;
+      }
+      if (Date.now() >= deadline) throw new Error("Goal state is busy; retry the operation");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+  try {
+    return await action();
+  } finally {
+    rmSync(lock, { recursive: true });
+  }
 }
 
 /**
@@ -159,6 +206,7 @@ export function writeRunFile(file, run) {
  * forever.
  */
 export function applyGoalUpdate(run, update) {
+  if (run.status === "cancelled") throw new Error("This Goal was cancelled; start a new /goal to work again");
   if (typeof update.objective === "string" && update.objective.trim() !== "") {
     run.objective = update.objective.trim();
   }

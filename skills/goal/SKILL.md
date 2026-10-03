@@ -23,6 +23,9 @@ the run token the Goal prompt supplied:
 - Use `status: "failed"` only for unrecoverable failure, or `"blocked"` when
   user input or external state is required.
 - `read_goal` returns the same projection the Goal panel shows.
+- `cancel_goal` permanently stops the addressed run while preserving its list.
+  Users can also use `/goal:cancel`; a cancelled run rejects further updates.
+  Start a new `/goal` to work again.
 
 Do not create a separate To-Do file for the Goal: the Goal's own To-Do list is
 the durable record.
@@ -32,8 +35,11 @@ branch. The Stop hook reads `event.conversation_id` and `event.branch_id` from
 the nested automation payload, claims `wake_pending`, and rechecks the run
 before calling the generic `agent.wake` capability. A queued wake must also
 re-check its run token immediately before submission so a replaced run cannot
-continue the wrong state. The MCP server may queue the same continuation while
-the current tool call is draining; `wake_pending` makes those paths idempotent.
+continue the wrong state. Progress updates never queue a competing continuation.
+The Stop hook waits on `event.phase: "interrupted"`, cancels on
+`"final_cancelled"`, and does not wake on `"final_failed"`. Recovery only wakes
+normally completed turns. Every process serializes branch mutations through
+the shared state lock, including writes after asynchronous host calls.
 
 After each mutation the package persists its complete display projection with
 the generic `conversation.flow.set` capability. Runtime never interprets Goal
