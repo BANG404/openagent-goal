@@ -12,12 +12,15 @@ import path from "node:path";
 import { createHostClient, hookEvent } from "./lib/openagent-host.mjs";
 import { continuationPrompt, flowProjection, publishGoal } from "./lib/goal-bridge.mjs";
 import { canContinue, dataRoot, isTerminal, readRun, withRunLock, writeRun } from "./lib/goal-state.mjs";
+import { defaultLocale, errorNotice, requestLocale } from "./i18n.mjs";
+
+let hookLocale = defaultLocale;
 
 export function readHookInput(text) {
   try {
     return JSON.parse(text);
-  } catch (error) {
-    throw new Error(`could not read hook payload: ${error.message}`);
+  } catch {
+    throw new Error("Could not read the Goal hook payload");
   }
 }
 
@@ -90,15 +93,17 @@ export async function continueFromStop(payload, { root = dataRoot(), client = cr
 }
 
 async function main() {
+  const client = createHostClient();
+  try { hookLocale = await requestLocale({}, client); } catch {}
   const payload = readHookInput(readFileSync(0, "utf8"));
-  await continueFromStop(payload);
+  await continueFromStop(payload, { client });
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     await main();
   } catch (error) {
-    process.stderr.write(`goal stop hook: ${error.message}\n`);
+    process.stderr.write(`${errorNotice(error, hookLocale)}\n`);
     process.exitCode = 1;
   }
 }

@@ -24,10 +24,11 @@ import {
 } from "./lib/goal-state.mjs";
 import { continuationPrompt, flowProjection, publishGoal } from "./lib/goal-bridge.mjs";
 import { controlGoal, GOAL_ACTIONS } from "./lib/goal-control.mjs";
+import { defaultLocale, errorNotice, noticeText, requestLocale } from "./i18n.mjs";
 
 const PROTOCOL_VERSION = "2024-11-05";
 const SERVER_NAME = "goal";
-const SERVER_VERSION = "2.2.0";
+const SERVER_VERSION = "2.2.1";
 const root = dataRoot();
 const host = createHostClient();
 const pendingWakes = new Map();
@@ -204,7 +205,10 @@ function scheduleWake(run, branchId) {
         }
         if (attempt >= 80) {
           if (pendingWakes.get(key) === run.run_id) pendingWakes.delete(key);
-          process.stderr.write(`goal wake failed for ${run.conversation_id}: ${error.message}\n`);
+          let locale = defaultLocale;
+          try { locale = await requestLocale({}, host); } catch {}
+          const code = String(error?.code ?? error?.cause?.code ?? "UNKNOWN");
+          process.stderr.write(`${noticeText("notice.wakeFailed", { conversation: run.conversation_id, code }, locale)}\n`);
           return;
         }
         setTimeout(() => void tick(), Math.min(1500, 100 + attempt * 100));
@@ -277,6 +281,19 @@ function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
+function methodNotFound(id, method) {
+  const respond = (locale) => send({
+    jsonrpc: "2.0",
+    id,
+    error: { code: -32601, message: noticeText("notice.methodMissing", { method }, locale) },
+  });
+  void requestLocale({}, host).then(respond).catch(() => respond(defaultLocale));
+}
+function serverError(error) {
+  const report = (locale) => process.stderr.write(`${errorNotice(error, locale)}\n`);
+  void requestLocale({}, host).then(report).catch(() => report(defaultLocale));
+}
+
 function reply(id, value, isError = false) {
   send({
     jsonrpc: "2.0",
@@ -311,10 +328,14 @@ function handle(message) {
   if (method === "tools/call") {
     callTool(params?.name, params?.arguments ?? {})
       .then((value) => reply(id, value))
-      .catch((error) => reply(id, error?.message ?? error, true));
+      .catch(async (error) => {
+        let locale = defaultLocale;
+        try { locale = await requestLocale(params?.arguments ?? {}, host); } catch {}
+        reply(id, errorNotice(error, locale), true);
+      });
     return;
   }
-  if (id !== undefined) send({ jsonrpc: "2.0", id, error: { code: -32601, message: `Method not found: ${method}` } });
+  if (id !== undefined) methodNotFound(id, method);
 }
 
 let buffer = "";
@@ -329,7 +350,7 @@ process.stdin.on("data", (chunk) => {
       try {
         handle(JSON.parse(line));
       } catch (error) {
-        process.stderr.write(`${SERVER_NAME} server: ${error.message}\n`);
+        serverError(error);
       }
     }
     index = buffer.indexOf("\n");

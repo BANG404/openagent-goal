@@ -208,7 +208,13 @@ describe("Goal package wake scheduling", () => {
       const cancelled = await mcp.callTool("cancel_goal", { run: run.run_id, _openagent: args._openagent });
       expect(cancelled.result.isError).toBe(false);
       expect(readRun(dataRoot, "conversation", "branch")).toMatchObject({ status: "cancelled", todos: [{ id: "work" }], wake_pending: false });
-      expect((await mcp.callTool("update_goal", args)).result.isError).toBe(true);
+      const translated = await mcp.callTool("update_goal", {
+        ...args,
+        _openagent: { ...args._openagent, locale: "zh" },
+      });
+      expect(translated.result.isError).toBe(true);
+      expect(translated.result.content[0].text)
+        .toBe("此会话分支中没有与该运行令牌匹配的 Goal");
       expect(host.requests.filter((request) => request.operation === "agent.wake")).toHaveLength(0);
     } finally {
       await mcp.stop();

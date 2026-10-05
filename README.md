@@ -89,6 +89,15 @@ The package also calls the generic `conversation.flow.set` capability after
 each state mutation. The host stores only the opaque display projection; the
 Goal files remain the package's source of truth.
 
+## Language support
+
+The package declares English and Chinese in `plugin.json`. OpenAgent supplies
+the current application language to each MCP call and through `locale.get` for
+commands and hooks. Plugin metadata, slash-command labels, validation errors,
+and operational notices follow that language. Goal IDs, lifecycle status
+values, user objectives, To-Dos, and historical results keep their original
+values.
+
 ## License
 
 MIT

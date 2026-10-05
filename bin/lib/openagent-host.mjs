@@ -347,8 +347,17 @@ export function createHostClient({
       return call("event.emit", { name: requiredText(source.name, "event name"), payload: source.payload ?? null });
     },
   };
+  const locale = {
+    async get() {
+      const result = await call("locale.get");
+      if (result?.version !== 1 || typeof result.locale !== "string" || !result.locale.trim()) {
+        throw new OpenAgentHostError("unsupported host locale response", { operation: "locale.get" });
+      }
+      return result.locale;
+    },
+  };
 
-  return Object.freeze({ pluginId: identity, call, conversation, branch, agent, roles, event });
+  return Object.freeze({ pluginId: identity, call, conversation, branch, agent, roles, event, locale });
 }
 
 /** The longer name is used by reference templates; keep both spellings stable. */
