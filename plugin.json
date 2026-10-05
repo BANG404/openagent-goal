@@ -1,13 +1,14 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "goal",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "description": "Persistent goal execution with an autonomous continuation loop.",
   "license": "MIT",
   "repository": "https://github.com/BANG404/openagent-goal",
   "keywords": ["openagent", "goal", "checkpoint", "automation"],
   "extensions": {
     "openagent": {
+      "mcp_tool_mode": "direct",
       "capabilities": ["command", "mcp", "automation"],
       "commands": [
         {
@@ -64,7 +65,7 @@
             "notice.unexpected": "Goal operation failed ({code})"
           },
           "zh": {
-            "display_name": "Goal",
+            "display_name": "目标",
             "description": "通过自主续行循环持续执行目标任务。",
             "commands.goal.label": "目标",
             "commands.goal.description": "查看、设置、编辑、暂停、恢复或清除持续执行的目标。",

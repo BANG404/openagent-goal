@@ -101,3 +101,12 @@ values.
 ## License
 
 MIT
+
+## MCP mounting and plugin name
+
+The manifest declares `mcp_tool_mode: direct`. Tools are available immediately
+for lifecycle operations.
+Users may select Direct, Relay, or Follow plugin declaration in OpenAgent
+Settings; the override applies to every server in this package.
+The English and Chinese display names follow the application language; the
+package ID, commands, tool names and persisted state remain stable.
